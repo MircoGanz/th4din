@@ -1777,6 +1777,9 @@ class Network:
 
         print("\n Start solver...")
 
+        for comp in self.components.values():
+            comp.reset()
+
         self._add_vars()
 
         vars_all = self.Vt + self.U
@@ -1885,6 +1888,9 @@ class Network:
         """
 
         print("\n Start solver...")
+
+        for comp in self.components.values():
+            comp.reset()
 
         self._add_vars()
         vars_all = self.Vt + self.U
