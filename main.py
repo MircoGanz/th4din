@@ -3,6 +3,7 @@ import numpy as np
 from CoolProp.CoolProp import PropsSI
 from multiprocessing.dummy import freeze_support
 
+
 def evap_model(evap):
 
     N = 50
@@ -347,41 +348,47 @@ net.connect("IHX", "out_hot", "Exp", "in", fluid_loop=1)
 net.connect("Exp", "out", "Evap", "in_cold", fluid_loop=1)
 net.connect("Evap", "out_cold", "IHX", "in_cold", fluid_loop=1)
 
+net.add_parameter("Comp", "RPM")
+net.add_parameter("Cond", "A")
+net.add_parameter("Evap", "A")
+net.add_parameter("IHX", "A")
+net.add_parameter("Exp", "Cf")
+net.add_parameter("Exp", "Av")
+
+net.add_output(comp_label='Evap', output_label='Q')
+
+net.add_constraint(label='subcool_eq', fun=subcooling_fun, ctype='eq', scale_factor=1e-5)
+net.add_constraint(label='supheat_eq', fun=superheat_fun, ctype='obj', weight_factor=1e-5)
+net.add_constraint(label='cool_load_eq', fun=cooling_load, ctype='obj', weight_factor=1e-3)
+
+net.add_loop_breaker(fluid_loop=1, junction_id=1)
+
+net.initialize()
+
 hi_evap_af = PropsSI("H", "P", 1e5, "T", -5.0+273.15, "INCOMP::AN[0.4]")
 net.set_bc("Evap", "in_hot", "p", 1e5, fluid_loop=2)
 net.set_bc("Evap", "in_hot", "h", hi_evap_af, fluid_loop=2)
-net.set_bc("Evap", "in_hot", "m", 1.0, fluid_loop=2)
+net.set_bc("Evap", "in_hot", "m", 1.0, fluid_loop=2, is_var=True, bounds=(0.8, 1.5))
 
 hi_cond_af = PropsSI("H", "P", 1e5, "T", 27.0+273.15, "INCOMP::AN[0.4]")
 net.set_bc("Cond", "in_cold", "p", 1e5, fluid_loop=3)
 net.set_bc("Cond", "in_cold", "h", hi_cond_af, fluid_loop=3)
 net.set_bc("Cond", "in_cold", "m", 1.0, fluid_loop=3)
 
-net.add_parameter("Comp", "RPM", value=1500,
-                  initial_value=1500, is_var=False, scale_factor=1e-3, bounds=(750, 3500))
-net.add_parameter("Cond", "A", value=3.65)
-net.add_parameter("Evap", "A", value=2.56)
-net.add_parameter("IHX", "A", value=0.75)
-net.add_parameter("Exp", "Cf", value=0.25)
-net.add_parameter("Exp", "Av", value=0.3,
-                  initial_value=0.3, is_var=False, bounds=(0.1, 1))
-
-net.add_output(comp_label='Evap', output_label='Q')
-
-net.add_constraint(label='subcool_eq', fun=subcooling_fun, ctype='eq', scale_factor=1e-5)
-# net.add_constraint(label='supheat_eq', fun=superheat_fun, ctype='obj', weight_factor=1e-5)
-# net.add_constraint(label='cool_load_eq', fun=cooling_load, ctype='obj', weight_factor=1e-3)
-
-net.set_loop_breaker(fluid_loop=1, junction_id=1)
-
-net.initialize()
+net.set_parameter("Comp", "RPM", value=2500, is_var=True, scale_factor=1.0e-3, bounds=(750, 3500))
+net.set_parameter("Exp", "Av", value=0.3, is_var=True, scale_factor=1.0, bounds=(0.1, 1.0))
+net.set_parameter("Exp", "Cf", value=0.25)
+net.set_parameter("Cond", "A", value=3.65)
+net.set_parameter("Evap", "A", value=2.56)
+net.set_parameter("IHX", "A", value=0.75)
 
 # net.print_tearing_variables()
-# x_init = [1.6e5, 4.1e5, 7.9e5, 7.9e5, 2.2e5, 1.6e5]
-x_init = [2.0e5, 4.0e5, 10.0e5, 10.0e5, 2.5e5, 2.0e5]
+x_init = [1.6e5, 4.1e5, 7.9e5, 7.9e5, 2.2e5, 1.6e5]
+# x_init = [2.0e5, 4.0e5, 10.0e5, 10.0e5, 2.5e5, 2.0e5]
 
 x_bnds = [(1.0e5, 4.0e5), (2.0e5, 6.0e5), (5.0e5, 30.0e5), (5.0e5, 30.0e5), (1.0e5, 3.5e5), (1.0e5, 4.0e5)]
 net.set_inital_values(x_init, x_bnds)
+net.print_residual_equations()
 
 def main():
     net.solve_system()

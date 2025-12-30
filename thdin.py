@@ -126,8 +126,6 @@ class Parameter:
         Current parameter value.
     scale_factor : float, optional
         Scaling factor used during optimization.
-    initial_value : float, optional
-        Initial value used for solver initialization.
     is_var : bool, optional
         Flag indicating whether the parameter is optimized.
     bounds : tuple of float, optional
@@ -139,15 +137,14 @@ class Parameter:
     def __init__(
         self,
         label,
-        value,
+        value=np.nan,
         scale_factor=1.0,
-        initial_value=None,
         is_var=False,
         bounds=(-np.inf, np.inf)
     ):
         self.label = label
         self.value = value
-        self.initial_value = initial_value
+        self.initial_value = value
         self.scale_factor = scale_factor
         self.is_var = is_var
         self.bounds = bounds
@@ -157,12 +154,6 @@ class Parameter:
         Assign a new value to the parameter.
         """
         self.value = v
-
-    def reset(self):
-        """
-        Reset parameter to its initial value.
-        """
-        self.value = self.initial_value
 
 
 class Output:
@@ -355,12 +346,13 @@ class BalanceEquation:
     __slots__ = (
         "variables",
         "fluid_loop",
+        "jid",
         "solved",
     )
 
     name = ""
 
-    def __init__(self, variables, fluid_loop):
+    def __init__(self, variables, fluid_loop, jid):
 
         if not isinstance(variables, (list, tuple)):
             raise TypeError(
@@ -369,6 +361,7 @@ class BalanceEquation:
 
         self.variables = list(variables)
         self.fluid_loop = fluid_loop
+        self.jid = jid
         self.solved = False
 
     def is_solvable(self) -> bool:
@@ -573,7 +566,7 @@ class EnthalpyFlowBalance(BalanceEquation):
     name = "Enthalpy Flow Balance"
     scale_factor = 1e-4
 
-    def __init__(self, variables, fluid_loop):
+    def __init__(self, variables, fluid_loop, jid):
         """
         Construct an enthalpy flow balance equation.
 
@@ -585,7 +578,7 @@ class EnthalpyFlowBalance(BalanceEquation):
             Fluid loop identifier.
         """
 
-        super().__init__(variables, fluid_loop)
+        super().__init__(variables, fluid_loop, jid)
 
         pairs = []
         multipliers = []
@@ -739,7 +732,7 @@ class Junction:
             ref = p_vars[0]
             for v in p_vars[1:]:
                 pressure_eqs.append(
-                    PressureEquality([ref, v], self.fluid_loop)
+                    PressureEquality([ref, v], self.fluid_loop, self.jid)
                 )
 
         # --------------------------------------------------
@@ -750,18 +743,18 @@ class Junction:
             ref = h_vars[0]
             for v in h_vars[1:]:
                 enthalpy_eqs.append(
-                    EnthalpyEquality([ref, v], self.fluid_loop)
+                    EnthalpyEquality([ref, v], self.fluid_loop, self.jid)
                 )
 
         # --------------------------------------------------
         # Mass and enthalpy-flow balances
         # --------------------------------------------------
-        mass_eq = MassFlowBalance(m_vars, self.fluid_loop)
+        mass_eq = MassFlowBalance(m_vars, self.fluid_loop, self.jid)
 
         if len(in_ports) > 1:
             self.equations = [
                 pressure_eqs,
-                [EnthalpyFlowBalance(mh_pairs, self.fluid_loop)],
+                [EnthalpyFlowBalance(mh_pairs, self.fluid_loop, self.jid)],
                 [mass_eq],
             ]
         else:
@@ -1195,11 +1188,6 @@ class Network:
         self,
         comp_label: str,
         param_label: str,
-        value: float,
-        scale_factor: float = 1.0,
-        initial_value=None,
-        is_var: bool = False,
-        bounds: tuple = (-np.inf, np.inf),
     ):
         """
         Add a parameter to a component.
@@ -1210,28 +1198,13 @@ class Network:
             Component label.
         param_label : str
             Parameter name.
-        value : float
-            Parameter value.
-        scale_factor : float, optional
-            Scaling factor for optimization.
-        initial_value : float, optional
-            Initial value for optimization.
-        is_var : bool, optional
-            Flag indicating whether this parameter is optimized.
-        bounds : tuple, optional
-            Optimization bounds.
         """
         comp = self.components.get(comp_label)
         if comp is None:
             raise RuntimeError(f'Component "{comp_label}" not in Network!')
 
         comp.parameter[param_label] = Parameter(
-            label=param_label,
-            value=value,
-            scale_factor=scale_factor,
-            initial_value=initial_value,
-            is_var=is_var,
-            bounds=bounds,
+            label=param_label
         )
 
     def add_constraint(
@@ -1319,7 +1292,6 @@ class Network:
         value,
         fluid_loop: int,
         scale_factor: float = 1.0,
-        initial_value=None,
         is_var: bool = False,
         bounds: tuple = (-np.inf, np.inf),
     ):
@@ -1347,7 +1319,7 @@ class Network:
             var=var,
             value=value,
             scale_factor=scale_factor,
-            initial_value=initial_value,
+            initial_value=value,
             is_var=is_var,
             bounds=bounds,
         )
@@ -1390,7 +1362,7 @@ class Network:
             var.bounds = x_bnds[i]
             i += 1
 
-    def set_loop_breaker(self, fluid_loop: int, junction_id: int):
+    def add_loop_breaker(self, fluid_loop: int, junction_id: int):
         """
         Define a loop breaker by removing one mass balance equation
         in a closed fluid loop.
@@ -1406,13 +1378,88 @@ class Network:
             raise RuntimeError(f"Junction {junction_id} does not exist.")
         self.loop_breakers[fluid_loop] = junction_id
 
-    def set_component_model(self, comp_label, model: Callable):
+    def set_component_model(self, comp_label: str, model: Callable):
+        """
+        Assign a physical model function to a component.
+
+        This method decouples the network topology from the component physics.
+        The assigned model is executed when the component is solved during
+        network evaluation.
+
+        Parameters
+        ----------
+        comp_label : str
+            Label of the component to which the model is assigned.
+        model : callable
+            Component model function with signature ``model(component)``.
+
+        Raises
+        ------
+        KeyError
+            If the specified component label does not exist in the network.
+        """
         self.components[comp_label].set_model(model)
+
+    def set_parameter(self,
+                      comp_label: str,
+                      param_label: str,
+                      value: float,
+                      scale_factor: float = 1.0,
+                      is_var: bool = False,
+                      bounds: tuple = (-np.inf, np.inf)):
+        """
+        Set or update a parameter of a component.
+
+        This method assigns numerical values and optimization metadata
+        to an existing component parameter. Parameters may optionally
+        be marked as optimization variables.
+
+        Parameters
+        ----------
+        comp_label : str
+            Label of the component containing the parameter.
+        param_label : str
+            Name of the parameter to be modified.
+        value : float
+            Numerical value of the parameter.
+        scale_factor : float, optional
+            Scaling factor applied during optimization (default is 1.0).
+        is_var : bool, optional
+            Flag indicating whether the parameter is treated as an
+            optimization variable (default is False).
+        bounds : tuple of float, optional
+            Lower and upper bounds for the parameter in physical units
+            (default is ``(-np.inf, np.inf)``).
+
+        Raises
+        ------
+        KeyError
+            If the component or parameter does not exist.
+        """
+
+        # Access parameter object
+        param = self.components[comp_label].parameter[param_label]
+
+        # Assign numerical value
+        param.set_value(value)
+
+        # Store initial value for solver initialization
+        param.initial_value = value
+
+        # Optimization-related metadata
+        param.scale_factor = scale_factor
+        param.is_var = is_var
+        param.bounds = bounds
 
     def print_tearing_variables(self):
         print("Tearing variables:")
         for var in self.Vt:
             print(f"{var} at component <{var.port.component.label}> , port <{var.port.name}>")
+
+    def print_residual_equations(self):
+        print("Residual equations:")
+        for eq in self.res_equa:
+            print(f"{eq.name} at junction {eq.jid}")
 
     def get_results(self):
         """
