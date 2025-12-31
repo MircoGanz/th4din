@@ -1123,14 +1123,14 @@ class ObjectiveFun:
         Weighting factor applied to the objective value.
     """
 
-    __slots__ = ("fun", "network", "weight_factor")
+    __slots__ = ("fun", "network", "scale_factor")
 
-    def __init__(self, network: "Network", fun: Callable, weight_factor: float = 1.0):
+    def __init__(self, network: "Network", fun: Callable, scale_factor: float = 1.0):
         if not callable(fun):
             raise TypeError("fun must be a callable python function")
         self.fun = fun
         self.network = network
-        self.weight_factor = weight_factor
+        self.scale_factor = scale_factor
 
     def solve(self):
         """
@@ -1146,7 +1146,7 @@ class ObjectiveFun:
         TypeError
             If the objective function does not return a scalar.
         """
-        res = self.fun(self.network) * self.weight_factor
+        res = self.fun(self.network) * self.scale_factor
         if isinstance(res, float):
             return res
         raise TypeError("objective function solve method must return float")
@@ -1484,7 +1484,7 @@ class Network:
     def print_tearing_variables(self):
         print("Tearing variables:")
         for var in self.Vt:
-            print(f"{var} at component <{var.port.component.label}> , port <{var.port.name}>")
+            print(f"{var} at component <{var.port.component.label}>")
 
     def print_residual_equations(self):
         print("Residual equations:")
@@ -2108,12 +2108,12 @@ class Network:
 
         total = 0.0
         for obj in self.objs.values():
-            total += obj.solve()
+            total += obj.solve()**2
 
         for comp in self.components.values():
             comp.reset()
 
-        return total
+        return np.sqrt(total)
 
     def _add_vars(self):
         """
