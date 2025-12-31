@@ -11,15 +11,15 @@ def evap_model(evap):
 
     A = evap.parameter['A'].value
 
-    hi_h = evap.ports['in_hot'].h.value
-    pi_h = evap.ports['in_hot'].p.value
-    m_h = evap.ports['in_hot'].m.value
-    hot_fluid = evap.ports['in_hot'].fluid
+    hi_h = evap.ports['in_af'].h.value
+    pi_h = evap.ports['in_af'].p.value
+    m_h = evap.ports['in_af'].m.value
+    hot_fluid = evap.ports['in_af'].fluid
 
-    hi_c = evap.ports['in_cold'].h.value
-    pi_c = evap.ports['in_cold'].p.value
-    m_c = evap.ports['in_cold'].m.value
-    cold_fluid = evap.ports['in_cold'].fluid
+    hi_c = evap.ports['in_r'].h.value
+    pi_c = evap.ports['in_r'].p.value
+    m_c = evap.ports['in_r'].m.value
+    cold_fluid = evap.ports['in_r'].fluid
 
     def res(x):
         h_h = np.zeros(N)
@@ -59,13 +59,13 @@ def evap_model(evap):
     ho_c = h_c[-1]
     mo_c = m_c
 
-    evap.ports['out_hot'].p.set_value(po_h)
-    evap.ports['out_hot'].h.set_value(ho_h)
-    evap.ports['out_hot'].m.set_value(mo_h)
+    evap.ports['out_af'].p.set_value(po_h)
+    evap.ports['out_af'].h.set_value(ho_h)
+    evap.ports['out_af'].m.set_value(mo_h)
 
-    evap.ports['out_cold'].p.set_value(po_c)
-    evap.ports['out_cold'].h.set_value(ho_c)
-    evap.ports['out_cold'].m.set_value(mo_c)
+    evap.ports['out_r'].p.set_value(po_c)
+    evap.ports['out_r'].h.set_value(ho_c)
+    evap.ports['out_r'].m.set_value(mo_c)
 
     evap.outputs["Q"].set_value(m_c * (ho_c - hi_c))
 
@@ -107,15 +107,15 @@ def cond_model(cond):
 
     A = cond.parameter['A'].value
 
-    hi_h = cond.ports["in_hot"].h.value
-    pi_h = cond.ports["in_hot"].p.value
-    m_h = cond.ports["in_hot"].m.value
-    hot_fluid = cond.ports["in_hot"].fluid
+    hi_h = cond.ports["in_r"].h.value
+    pi_h = cond.ports["in_r"].p.value
+    m_h = cond.ports["in_r"].m.value
+    hot_fluid = cond.ports["in_r"].fluid
 
-    hi_c = cond.ports["in_cold"].h.value
-    pi_c = cond.ports["in_cold"].p.value
-    m_c = cond.ports["in_cold"].m.value
-    cold_fluid = cond.ports["in_cold"].fluid
+    hi_c = cond.ports["in_af"].h.value
+    pi_c = cond.ports["in_af"].p.value
+    m_c = cond.ports["in_af"].m.value
+    cold_fluid = cond.ports["in_af"].fluid
 
     def res(x):
         h_h = np.zeros(N)
@@ -155,13 +155,13 @@ def cond_model(cond):
     ho_c = h_c[0]
     mo_c = m_c
 
-    cond.ports["out_hot"].p.set_value(po_h)
-    cond.ports["out_hot"].h.set_value(ho_h)
-    cond.ports["out_hot"].m.set_value(mo_h)
+    cond.ports["out_r"].p.set_value(po_h)
+    cond.ports["out_r"].h.set_value(ho_h)
+    cond.ports["out_r"].m.set_value(mo_h)
 
-    cond.ports["out_cold"].p.set_value(po_c)
-    cond.ports["out_cold"].h.set_value(ho_c)
-    cond.ports["out_cold"].m.set_value(mo_c)
+    cond.ports["out_af"].p.set_value(po_c)
+    cond.ports["out_af"].h.set_value(ho_c)
+    cond.ports["out_af"].m.set_value(mo_c)
 
 
 def exp_model(exp):
@@ -242,20 +242,20 @@ def ihx_model(comp):
 
 
 def subcooling_fun(net):
-    h_s = PropsSI('H', 'P', net.components['Cond'].ports["out_hot"].p.value,
-                  'Q', 0.0, net.components['Cond'].ports["out_hot"].fluid)
-    res = (net.components['Cond'].ports["out_hot"].h.value - h_s)
+    h_s = PropsSI('H', 'P', net.components['Cond'].ports["out_r"].p.value,
+                  'Q', 0.0, net.components['Cond'].ports["out_r"].fluid)
+    res = (net.components['Cond'].ports["out_r"].h.value - h_s)
     return res
 
 
 def superheat_fun(net):
     DC_value = 5.0
-    T_sat = PropsSI('T', 'P', net.components['Evap'].ports["out_cold"].p.value,
-                    'Q', 1.0, net.components['Evap'].ports["out_cold"].fluid)
+    T_sat = PropsSI('T', 'P', net.components['Evap'].ports["out_r"].p.value,
+                    'Q', 1.0, net.components['Evap'].ports["out_r"].fluid)
     h_SH = PropsSI('H', 'T', T_sat + DC_value,
-                   'P', net.components['Evap'].ports["out_cold"].p.value,
-                   net.components['Evap'].ports["out_cold"].fluid)
-    res = np.abs(net.components['Evap'].ports["out_cold"].h.value - h_SH)
+                   'P', net.components['Evap'].ports["out_r"].p.value,
+                   net.components['Evap'].ports["out_r"].fluid)
+    res = np.abs(net.components['Evap'].ports["out_r"].h.value - h_SH)
     return res
 
 
@@ -275,10 +275,10 @@ net.fluid_loops[3] = "INCOMP::AN[0.4]"
 evap = MassFlowBasedComponent(
     label="Evap",
     port_specs={
-        "in_hot":  PortSpec("in"),
-        "out_hot": PortSpec("out"),
-        "in_cold": PortSpec("in"),
-        "out_cold": PortSpec("out"),
+        "in_af":  PortSpec("in"),
+        "out_af": PortSpec("out"),
+        "in_r": PortSpec("in"),
+        "out_r": PortSpec("out"),
     },
 )
 
@@ -293,10 +293,10 @@ comp = PressureBasedComponent(
 cond = MassFlowBasedComponent(
     label="Cond",
     port_specs={
-        "in_hot":  PortSpec("in"),
-        "out_hot": PortSpec("out"),
-        "in_cold": PortSpec("in"),
-        "out_cold": PortSpec("out"),
+        "in_r":  PortSpec("in"),
+        "out_r": PortSpec("out"),
+        "in_af": PortSpec("in"),
+        "out_af": PortSpec("out"),
     },
 )
 
@@ -341,12 +341,12 @@ net.set_component_model("IHX", ihx_model)
 net.set_component_model("Rev", rev_model)
 
 net.connect("IHX", "out_cold", "Comp", "in",  fluid_loop=1)
-net.connect("Comp", "out", "Cond", "in_hot",   fluid_loop=1)
-net.connect("Cond", "out_hot", "Rev", "in", fluid_loop=1)
+net.connect("Comp", "out", "Cond", "in_r",   fluid_loop=1)
+net.connect("Cond", "out_r", "Rev", "in", fluid_loop=1)
 net.connect("Rev", "out", "IHX", "in_hot", fluid_loop=1)
 net.connect("IHX", "out_hot", "Exp", "in", fluid_loop=1)
-net.connect("Exp", "out", "Evap", "in_cold", fluid_loop=1)
-net.connect("Evap", "out_cold", "IHX", "in_cold", fluid_loop=1)
+net.connect("Exp", "out", "Evap", "in_r", fluid_loop=1)
+net.connect("Evap", "out_r", "IHX", "in_cold", fluid_loop=1)
 
 net.add_parameter("Comp", "RPM")
 net.add_parameter("Cond", "A")
@@ -365,15 +365,23 @@ net.add_loop_breaker(fluid_loop=1, junction_id=1)
 
 net.initialize()
 
-hi_evap_af = PropsSI("H", "P", 1e5, "T", -5.0+273.15, "INCOMP::AN[0.4]")
-net.set_bc("Evap", "in_hot", "p", 1e5, fluid_loop=2)
-net.set_bc("Evap", "in_hot", "h", hi_evap_af, fluid_loop=2)
-net.set_bc("Evap", "in_hot", "m", 1.0, fluid_loop=2, is_var=True, bounds=(0.8, 1.5))
+# Boundary conditions at the evaporator antifrogen inlet and outlet ports
+hi_evap_af = PropsSI("H", "P", 1e5, "T", -5.0+273.15, net.fluid_loops[2])
+net.set_bc("Evap", "in_af", bc_type="input", var_type= "p", value=1e5, fluid_loop=2)
+net.set_bc("Evap", "in_af", bc_type="input", var_type="h", value=hi_evap_af, fluid_loop=2)
+net.set_bc("Evap", "in_af", bc_type="input", var_type="m", value=1.0, fluid_loop=2)
+net.set_bc("Evap", "out_af", bc_type="output", var_type= "p", fluid_loop=2)
+net.set_bc("Evap", "out_af", bc_type="output", var_type="h", fluid_loop=2)
+net.set_bc("Evap", "out_af", bc_type="output", var_type="m", fluid_loop=2)
 
-hi_cond_af = PropsSI("H", "P", 1e5, "T", 27.0+273.15, "INCOMP::AN[0.4]")
-net.set_bc("Cond", "in_cold", "p", 1e5, fluid_loop=3)
-net.set_bc("Cond", "in_cold", "h", hi_cond_af, fluid_loop=3)
-net.set_bc("Cond", "in_cold", "m", 1.0, fluid_loop=3)
+# Boundary conditions at the condenser antifrogen inlet and outlet ports
+hi_cond_af = PropsSI("H", "P", 1e5, "T", 16.0+273.15, net.fluid_loops[3])
+net.set_bc("Cond", "in_af", bc_type="input", var_type="p", value=1e5, fluid_loop=3)
+net.set_bc("Cond", "in_af", bc_type="input", var_type="h", value=hi_cond_af, fluid_loop=3)
+net.set_bc("Cond", "in_af", bc_type="input", var_type="m", value=1.0, fluid_loop=3)
+net.set_bc("Cond", "out_af", bc_type="output", var_type="p", fluid_loop=3)
+net.set_bc("Cond", "out_af", bc_type="output", var_type="h", fluid_loop=3)
+net.set_bc("Cond", "out_af", bc_type="output", var_type="m", fluid_loop=3)
 
 net.set_parameter("Comp", "RPM", value=2500, is_var=True, scale_factor=1.0e-3, bounds=(750, 3500))
 net.set_parameter("Exp", "Av", value=0.3, is_var=True, scale_factor=1.0, bounds=(0.1, 1.0))

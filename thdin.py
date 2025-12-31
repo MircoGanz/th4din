@@ -906,9 +906,15 @@ class BoundaryCondition:
     """
     Boundary condition applied to a port variable.
 
-    A boundary condition constrains a single variable (pressure, enthalpy,
-    or mass flow) at a port to a prescribed value. Boundary conditions may
-    either be fixed or treated as optimization variables.
+    A boundary condition defines the role of a port variable that is not
+    determined by junction balance equations.
+
+    Two types of boundary conditions are distinguished:
+
+    - Input boundary conditions prescribe numerical values and define system
+      inputs.
+    - Output boundary conditions specify variables that are computed by
+      component models and therefore must not be prescribed.
 
     This class acts as a lightweight wrapper around a :class:`Variable`
     instance and integrates seamlessly into the solver and optimization
@@ -918,8 +924,11 @@ class BoundaryCondition:
     ----------
     var : Variable
         Variable to which the boundary condition is applied.
-    value : float
-        Boundary condition value.
+    value : float or None
+        Boundary condition value. Must be provided for input boundary
+        conditions and must be None for output boundary conditions.
+    type : {"input", "output"}
+        Type of boundary condition.
     scale_factor : float, optional
         Scaling factor used when the boundary condition is treated as an
         optimization variable.
@@ -932,22 +941,40 @@ class BoundaryCondition:
         Lower and upper bounds for optimization.
     """
 
-    __slots__ = ("var", "value", "initial_value", "scale_factor", "is_var", "bounds")
+    __slots__ = (
+        "var",
+        "value",
+        "type",
+        "initial_value",
+        "scale_factor",
+        "is_var",
+        "bounds",
+    )
 
     def __init__(
         self,
         var,
         value,
+        type,
         scale_factor: float = 1.0,
         initial_value=None,
         is_var: bool = False,
         bounds: tuple = (-np.inf, np.inf),
     ):
+        if type not in ("input", "output"):
+            raise ValueError(f"Unknown boundary condition type: {type}")
+
+        if type == "input" and value is None:
+            raise ValueError("Input boundary condition requires a value.")
+
+        if type == "output" and value is not None:
+            raise ValueError("Output boundary condition must not prescribe a value.")
+
         self.var = var
         self.value = value
-        self.initial_value = value
+        self.type = type
         self.scale_factor = scale_factor
-        self.initial_value = initial_value
+        self.initial_value = initial_value if initial_value is not None else value
         self.is_var = is_var
         self.bounds = bounds
 
@@ -955,20 +982,13 @@ class BoundaryCondition:
         """
         Apply the boundary condition to the associated variable.
 
-        This method directly sets the variable value and is called
-        before each network evaluation.
+        Only input boundary conditions prescribe numerical values.
+        This method is typically called before each network evaluation.
         """
-        self.var.set_value(self.value)
+        if self.type == "input":
+            self.var.set_value(self.value)
 
     def set_value(self, value):
-        """
-        Update the boundary condition value.
-
-        Parameters
-        ----------
-        value : float
-            New boundary condition value.
-        """
         self.var.set_value(value)
 
 
@@ -1285,48 +1305,56 @@ class Network:
 
         self.junctions[self._jid] = junction
 
-
     def set_bc(
-        self,
-        comp_label: str,
-        port_name: str,
-        var_type: str,
-        value,
-        fluid_loop: int,
-        scale_factor: float = 1.0,
-        is_var: bool = False,
-        bounds: tuple = (-np.inf, np.inf),
+            self,
+            comp_label: str,
+            port_name: str,
+            bc_type: str,  # "input" or "output"
+            var_type: str,  # "p", "h", "m"
+            value: float = None,
+            fluid_loop: int = None,
+            scale_factor: float = 1.0,
+            is_var: bool = False,
+            bounds: tuple = (-np.inf, np.inf),
     ):
         """
         Apply a boundary condition to a port variable.
 
-        Parameters
-        ----------
-        comp_label : str
-            Component label.
-        port_name : str
-            Port name.
-        var_type : {"p", "h", "m"}
-            Variable type.
-        value : float
-            Boundary value.
-        fluid_loop : int
-            Fluid loop index.
+        Input boundary conditions prescribe numerical values.
+        Output boundary conditions define the role of a variable without
+        prescribing a value.
         """
         port = self.components[comp_label].ports[port_name]
-        port.fluid = self.fluid_loops[fluid_loop]
+
+        # Assign fluid loop (required for both input and output BCs)
+        if fluid_loop is not None:
+            port.fluid = self.fluid_loops[fluid_loop]
 
         var = getattr(port, var_type)
+
         bc = BoundaryCondition(
             var=var,
             value=value,
+            type=bc_type,
             scale_factor=scale_factor,
             initial_value=value,
             is_var=is_var,
             bounds=bounds,
         )
 
-        bc._apply()
+        # Only input boundary conditions prescribe values
+        if bc_type == "input":
+            if value is None:
+                raise ValueError("Input boundary condition requires a value.")
+            bc._apply()
+
+        elif bc_type == "output":
+            if value is not None:
+                raise ValueError("Output boundary condition must not prescribe a value.")
+
+        else:
+            raise ValueError(f"Unknown bc_type: {bc_type}")
+
         self.boundary_conditions[var] = bc
 
     def set_inital_values(self, x_init, x_bnds):
