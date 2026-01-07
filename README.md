@@ -5,9 +5,18 @@ network modeling with unified support for **direct** and **inverse** problem
 formulations.
 
 The framework implements the methodology presented in the accompanying paper
+
+**Mirco Ganz, Frank Tillenkamp, Christian Ghiaus**  
+*Methodology for solving direct and inverse steady-state thermal–hydraulic network problems*
+
 and enables the simulation, analysis, and set-point-driven optimization of
 coupled thermal–hydraulic systems using a hybrid **causal–acausal** modeling
 approach combined with a **tearing-based system reduction**.
+
+A Jupyter Notebook to reproduce the
+test case presented in the publication can be executed by the following binder link:
+
+[![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/MircoGanz/th4din/main?filepath=main.ipynb)
 
 ---
 
@@ -30,7 +39,3 @@ approach combined with a **tearing-based system reduction**.
 - Reproducible workflows using **Jupyter notebooks**
 
 ---
-
-[![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/MircoGanz/th4din/main?filepath=main.ipynb)
-
-
