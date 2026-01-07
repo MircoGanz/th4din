@@ -14,7 +14,7 @@ coupled thermal–hydraulic systems using a hybrid **causal–acausal** modeling
 approach combined with a **tearing-based system reduction**.
 
 A Jupyter Notebook to reproduce the
-test case presented in the publication can be executed by the following binder link:
+test case, presented in the publication, can be executed by the following binder link:
 
 [![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/MircoGanz/th4din/main?filepath=main.ipynb)
 
