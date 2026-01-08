@@ -18,6 +18,7 @@ test case, presented in the publication, can be executed by the following binder
 
 [![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/MircoGanz/th4din/main?filepath=main.ipynb)
 
+**Autor**: Mirco Ganz
 ---
 
 ## Key Features
@@ -27,8 +28,9 @@ test case, presented in the publication, can be executed by the following binder
 - Automatic system assembly using junction balance equations  
 - Graph-based tearing algorithm to reduce nonlinear system size  
 - Unified treatment of:
-  - **Direct problems** (prescribed inputs, solve for system state)
-  - **Inverse problems** (simultaneous analysis and design, SAND)
+  - **Direct problems** (prescribed inputs, solve for system state and outputs)
+  - **Inverse problems** (prescribed subset of outputs, solve for system state and unknown inputs / boundary conditions, parameter identification using simultaneous analysis and design, SAND)
+  - **Optimization** (System optimization with variable design parameter)
 - Explicit handling of:
   - boundary conditions,
   - closed and open fluid loops,
