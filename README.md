@@ -7,7 +7,7 @@ formulations.
 The framework implements the methodology presented in the accompanying paper:
 
 **Mirco Ganz, Frank Tillenkamp, Christian Ghiaus**  
-*Methodology for Solving Direct and Inverse Steady-State Thermal–Hydraulic Network Problems*
+*Methodology for solving direct and inverse steady-State thermal–Hydraulic network problems*
 
 and enables simulation, analysis, and set-point-driven optimization of coupled
 thermal–hydraulic systems using a hybrid **causal–acausal** modeling approach
