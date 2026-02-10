@@ -1014,17 +1014,21 @@ class EqualityConstraint:
         The function must return either a scalar or a NumPy array.
     scale_factor : float, optional
         Scaling factor applied to the constraint value.
+    is_system_residual : bool, optional
+        If True, the equality is treated as part of the implicit system
+        residual equations in reduced-space mode.
     """
 
-    __slots__ = ("fun", "network", "scale_factor", "is_active")
+    __slots__ = ("fun", "network", "scale_factor", "is_active", "is_system_residual")
 
-    def __init__(self, network: "Network", fun: Callable, scale_factor: float = 1.0, is_active=True):
+    def __init__(self, network: "Network", fun: Callable, scale_factor: float = 1.0, is_active: bool = True, is_system_residual: bool = False):
         if not callable(fun):
             raise TypeError("fun must be a callable python function")
         self.fun = fun
         self.network = network
         self.scale_factor = scale_factor
         self.is_active = is_active
+        self.is_system_residual = is_system_residual
 
     def solve(self):
         """
@@ -1205,6 +1209,7 @@ class Network:
         self.exec_list = []
         self.res_equa = []
         self.no_design_equa = (False, 0)
+        self._sol_cache = {}
 
     def add_component(self, comp: Component):
         """
@@ -1246,6 +1251,7 @@ class Network:
         fun: Callable,
         ctype: str = "eq",
         scale_factor: float = 1.0,
+        is_system_residual: bool = False,
     ):
         """
         Add an equality, inequality, or objective function.
@@ -1260,14 +1266,21 @@ class Network:
             Constraint type.
         scale_factor : float, optional
             Scaling factor for constraints.
-        weight_factor : float, optional
-            Weight factor for objective functions.
+        is_system_residual : bool, optional
+            Only for ``ctype="eq"``. If True, the equality constraint is
+            treated as part of the implicit system residual equations.
+            This is useful to close underdetermined systems, especially in
+            reduced-space mode.
         """
         if ctype == "eq":
-            self.econs[label] = EqualityConstraint(self, fun, scale_factor)
+            self.econs[label] = EqualityConstraint(self, fun, scale_factor, is_system_residual=is_system_residual)
         elif ctype == "ineq":
+            if is_system_residual:
+                raise ValueError("is_system_residual is only valid for ctype='eq'")
             self.iecons[label] = InequalityConstraint(self, fun, scale_factor)
         elif ctype == "obj":
+            if is_system_residual:
+                raise ValueError("is_system_residual is only valid for ctype='eq'")
             self.objs[label] = ObjectiveFun(self, fun, scale_factor)
         else:
             raise ValueError(f"Unknown constraint type '{ctype}'")
@@ -2014,6 +2027,349 @@ class Network:
                 print("\n Solver did not converged successfully")
 
         print(sol)
+
+    def solve_system_reduced(self, acc: float = 1e-6, max_iter: int = 100):
+        """
+        Solve the optimization problem in reduced-space formulation.
+
+        In reduced-space mode, the tearing variables are treated as implicit
+        states ``y`` that satisfy the residual equations ``R(y, u) = 0`` for a
+        given vector of design variables ``u`` (parameters and variable
+        boundary conditions). The outer optimizer only sees ``u``.
+
+        Gradients are computed with an implicit-adjoint formulation:
+
+        ``R_y^T * lambda = f_y^T`` and ``df/du = f_u - R_u^T * lambda``.
+        """
+
+        print("\n Start reduced-space solver...")
+
+        for comp in self.components.values():
+            comp.reset()
+
+        self.U = []
+        self._add_vars()
+
+        n_u = len(self.U)
+        x0_u = np.zeros(n_u)
+        bounds_u = []
+
+        for i, v in enumerate(self.U):
+            x0_u[i] = v.initial_value * v.scale_factor
+            bounds_u.append((
+                v.bounds[0] * v.scale_factor,
+                v.bounds[1] * v.scale_factor,
+            ))
+
+        constraints = []
+
+        if any(c.is_active and not c.is_system_residual for c in self.econs.values()):
+            constraints.append({
+                "type": "eq",
+                "fun": self._solve_econs_reduced,
+                "jac": self._solve_econs_reduced_jac,
+            })
+
+        if self.iecons:
+            constraints.append({
+                "type": "ineq",
+                "fun": self._solve_iecons_reduced,
+                "jac": self._solve_iecons_reduced_jac,
+            })
+
+        if n_u == 0:
+            y_sol = self._solve_state_for_u(np.array([]))
+            self._solve(np.concatenate([y_sol, np.array([])]))
+            print("\n No design variables defined; solved state equations only")
+            return
+
+        self._sol_cache["x"] = None
+        self._sol_cache["u"] = None
+        self._sol_cache["R_y"] = None
+
+        sol = scipy.optimize.minimize(
+            fun=self._solve_objs_reduced,
+            x0=x0_u,
+            jac=self._solve_objs_reduced_grad,
+            bounds=bounds_u,
+            constraints=constraints,
+            method="SLSQP",
+            options={
+                "ftol": acc,
+                "maxiter": max_iter,
+                "disp": True,
+            },
+        )
+
+        if sol["success"]:
+            y_sol = self._solve_state_for_u(sol["x"])
+            self._solve(np.concatenate([y_sol, sol["x"]]))
+            print("\n Solver converged successfully")
+        else:
+            print("\n Solver did not converged successfully")
+
+        print(sol)
+
+    def _solve_residuals_only(self, x):
+        """Evaluate only tearing residual equations for a full variable vector."""
+
+        self._solve(x)
+        res = [eq.residual() for eq in self.res_equa]
+
+        for c in self.econs.values():
+            if c.is_active and c.is_system_residual:
+                val = c.solve()
+                if isinstance(val, (list, tuple, np.ndarray)):
+                    res.extend(val)
+                else:
+                    res.append(val)
+
+        for comp in self.components.values():
+            comp.reset()
+
+        return np.asarray(res)
+
+    def _solve_state_for_u(self, u_scaled):
+        """Solve implicit state equations ``R(y, u)=0`` for fixed ``u``."""
+
+        ny = len(self.Vt)
+        if ny == 0:
+            return np.array([])
+
+        if not self._sol_cache is {}:
+            y0 = self._sol_cache["x"]
+
+        else:
+            y0 = np.array([
+                v.initial_value * v.scale_factor
+                for v in self.Vt
+            ])
+
+        def res_y(y_scaled):
+            x_full = np.concatenate([y_scaled, u_scaled])
+            return self._solve_residuals_only(x_full)
+
+        sol = scipy.optimize.root(res_y, y0)
+        if not sol.success:
+            raise RuntimeError("Implicit state solve failed in reduced-space mode")
+        self._sol_cache["x"] = sol.x
+        self._sol_cache["u"] = u_scaled
+        self._sol_cache["R_y"] = np.asarray(sol.fjac)
+
+        return np.asarray(sol.x), np.asarray(sol.fjac)
+
+    def _solve_objs_reduced(self, u_scaled):
+        """Reduced objective evaluation ``f(u)=F(y(u), u)``."""
+
+        if u_scaled != self._sol_cache["u"]:
+            y_sol = self._solve_state_for_u(u_scaled)
+            self._sol_cache["u"] = u_scaled
+            self._sol_cache["x"] = y_sol
+        else:
+            y_sol = self._sol_cache["x"]
+        return self._solve_objs(np.concatenate([y_sol, u_scaled]))
+
+    def _solve_econs_reduced(self, u_scaled):
+        """Evaluate user equality constraints in reduced-space mode."""
+
+        if u_scaled != self._sol_cache["u"]:
+            y_sol, R_y = self._solve_state_for_u(u_scaled)
+            self._sol_cache["u"] = u_scaled
+            self._sol_cache["x"] = y_sol
+            self._sol_cache["R_y"] = R_y
+        else:
+            y_sol = self._sol_cache["x"]
+        x_full = np.concatenate([y_sol, u_scaled])
+        self._solve(x_full)
+
+        res = []
+        for c in self.econs.values():
+            if c.is_active and not c.is_system_residual:
+                val = c.solve()
+                if isinstance(val, (list, tuple, np.ndarray)):
+                    res.extend(val)
+                else:
+                    res.append(val)
+
+        for comp in self.components.values():
+            comp.reset()
+
+        return np.asarray(res)
+
+    def _solve_iecons_reduced(self, u_scaled):
+        """Evaluate user inequality constraints in reduced-space mode."""
+
+        if u_scaled != self._sol_cache["u"]:
+            y_sol, R_y = self._solve_state_for_u(u_scaled)
+            self._sol_cache["u"] = u_scaled
+            self._sol_cache["x"] = y_sol
+            self._sol_cache["R_y"] = R_y
+        else:
+            y_sol = self._sol_cache["x"]
+        x_full = np.concatenate([y_sol, u_scaled])
+        self._solve(x_full)
+
+        res = []
+        for c in self.iecons.values():
+            if c.is_active:
+                val = c.solve()
+                if isinstance(val, (list, tuple, np.ndarray)):
+                    res.extend(val)
+                else:
+                    res.append(val)
+
+        for comp in self.components.values():
+            comp.reset()
+
+        return np.asarray(res)
+
+    def _solve_objs_reduced_grad(self, u_scaled):
+        """Implicit-adjoint gradient of reduced objective."""
+        return self._reduced_adjoint_gradient(u_scaled, self._solve_objs)
+
+    def _solve_econs_reduced_jac(self, u_scaled):
+        """Implicit-adjoint Jacobian of reduced equality constraints."""
+        return self._reduced_adjoint_jacobian(u_scaled, self._eval_active_econs_full)
+
+    def _solve_iecons_reduced_jac(self, u_scaled):
+        """Implicit-adjoint Jacobian of reduced inequality constraints."""
+        return self._reduced_adjoint_jacobian(u_scaled, self._eval_active_iecons_full)
+
+    def _eval_active_econs_full(self, x_full):
+        """Evaluate active user equality constraints for a full variable vector."""
+        self._solve(x_full)
+        res = []
+        for c in self.econs.values():
+            if c.is_active and not c.is_system_residual:
+                val = c.solve()
+                if isinstance(val, (list, tuple, np.ndarray)):
+                    res.extend(val)
+                else:
+                    res.append(val)
+        for comp in self.components.values():
+            comp.reset()
+        return np.asarray(res)
+
+    def _eval_active_iecons_full(self, x_full):
+        """Evaluate active user inequality constraints for a full variable vector."""
+        self._solve(x_full)
+        res = []
+        for c in self.iecons.values():
+            if c.is_active:
+                val = c.solve()
+                if isinstance(val, (list, tuple, np.ndarray)):
+                    res.extend(val)
+                else:
+                    res.append(val)
+        for comp in self.components.values():
+            comp.reset()
+        return np.asarray(res)
+
+    def _reduced_adjoint_gradient(self, u_scaled, full_scalar_fun):
+        """Compute reduced gradient by implicit adjoint with FD partials."""
+
+        if u_scaled != self._sol_cache["u"]:
+            y, R_y = self._solve_state_for_u(u_scaled)
+            self._sol_cache["x"] = y
+            self._sol_cache["u"] = u_scaled
+            self._sol_cache["R_y"] = R_y
+        else:
+            y = self._sol_cache["x"]
+            R_y = self._sol_cache["R_y"]
+        x = np.concatenate([y, u_scaled])
+
+        ny = len(self.Vt)
+        nu = len(self.U)
+
+        eps_y = np.array([1e-6 * max(abs(v), 1.0) for v in y]) if ny else np.array([])
+        eps_u = np.array([1e-6 * max(abs(v), 1.0) for v in u_scaled])
+
+        f0 = float(full_scalar_fun(x))
+        f_y = np.zeros(ny)
+        f_u = np.zeros(nu)
+
+        for j in range(ny):
+            x_p = x.copy()
+            x_p[j] += eps_y[j]
+            f_y[j] = (float(full_scalar_fun(x_p)) - f0) / eps_y[j]
+
+        for k in range(nu):
+            x_p = x.copy()
+            x_p[ny + k] += eps_u[k]
+            f_u[k] = (float(full_scalar_fun(x_p)) - f0) / eps_u[k]
+
+        if ny == 0:
+            return f_u
+
+        R0 = self._solve_residuals_only(x)
+        R_u = np.zeros((ny, nu))
+
+        for k in range(nu):
+            x_p = x.copy()
+            x_p[ny + k] += eps_u[k]
+            R_u[:, k] = (self._solve_residuals_only(x_p) - R0) / eps_u[k]
+
+        try:
+            lam = np.linalg.solve(R_y.T, f_y)
+        except np.linalg.LinAlgError:
+            lam = np.linalg.lstsq(R_y.T, f_y, rcond=None)[0]
+
+        return f_u - R_u.T @ lam
+
+    def _reduced_adjoint_jacobian(self, u_scaled, full_vector_fun):
+        """Compute reduced Jacobian for vector constraints by implicit adjoint."""
+
+        y = self._solve_state_for_u(u_scaled)
+        x = np.concatenate([y, u_scaled])
+
+        ny = len(self.Vt)
+        nu = len(self.U)
+
+        g0 = np.asarray(full_vector_fun(x), dtype=float)
+        m = g0.size
+
+        eps_y = np.array([1e-6 * max(abs(v), 1.0) for v in y]) if ny else np.array([])
+        eps_u = np.array([1e-6 * max(abs(v), 1.0) for v in u_scaled]) if nu else np.array([])
+
+        g_y = np.zeros((m, ny))
+        g_u = np.zeros((m, nu))
+
+        for j in range(ny):
+            x_p = x.copy()
+            x_p[j] += eps_y[j]
+            g_y[:, j] = (np.asarray(full_vector_fun(x_p), dtype=float) - g0) / eps_y[j]
+
+        for k in range(nu):
+            x_p = x.copy()
+            x_p[ny + k] += eps_u[k]
+            g_u[:, k] = (np.asarray(full_vector_fun(x_p), dtype=float) - g0) / eps_u[k]
+
+        if ny == 0:
+            return g_u
+
+        R0 = self._solve_residuals_only(x)
+        R_y = np.zeros((ny, ny))
+        R_u = np.zeros((ny, nu))
+
+        for j in range(ny):
+            x_p = x.copy()
+            x_p[j] += eps_y[j]
+            R_y[:, j] = (self._solve_residuals_only(x_p) - R0) / eps_y[j]
+
+        for k in range(nu):
+            x_p = x.copy()
+            x_p[ny + k] += eps_u[k]
+            R_u[:, k] = (self._solve_residuals_only(x_p) - R0) / eps_u[k]
+
+        jac = np.zeros((m, nu))
+        for i in range(m):
+            try:
+                lam = np.linalg.solve(R_y.T, g_y[i, :])
+            except np.linalg.LinAlgError:
+                lam = np.linalg.lstsq(R_y.T, g_y[i, :], rcond=None)[0]
+            jac[i, :] = g_u[i, :] - R_u.T @ lam
+
+        return jac
 
     def _solve(self, x):
         """
