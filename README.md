@@ -4,12 +4,7 @@
 network modeling with unified support for **direct** and **inverse** problem
 formulations.
 
-The module is a python implementation of the methodology presented in the accompanying paper:
-
-**Mirco Ganz, Frank Tillenkamp, Christian Ghiaus**  
-*Methodology for solving direct and inverse steady-State thermal–Hydraulic network problems*
-
-and enables simulation, analysis, and set-point-driven optimization of coupled
+The module is a python implementation and enables simulation, analysis, and set-point-driven optimization of coupled
 thermal–hydraulic network using a hybrid **causal–acausal** modeling approach
 combined with **graph-based tearing for system reduction**.
 
